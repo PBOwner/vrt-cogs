@@ -243,7 +243,7 @@ class AutoDocs(commands.Cog):
                     buffer.seek(0)
                 file = discord.File(buffer)
                 txt = _("Here are your docs for {}!").format(cog.qualified_name)
-            if file.__sizeof__() > ctx.guild.filesize_limit:
+            if ctx.guild and file.__sizeof__() > ctx.guild.filesize_limit:
                 await ctx.send("File size too large!")
             else:
                 await ctx.send(txt, file=file)
