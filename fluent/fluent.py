@@ -72,7 +72,7 @@ class Fluent(commands.Cog):
     def __init__(self, bot: Red):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=11701170)
-        self.config.register_guild(channels={}, auto_translate=False)
+        self.config.register_guild(channels={}, auto_translate_channels=[])
         logging.getLogger("hpack.hpack").setLevel(logging.INFO)
         logging.getLogger("deepl").setLevel(logging.WARNING)
 
@@ -268,10 +268,26 @@ class Fluent(commands.Cog):
 
     @commands.command()
     @commands.mod()
-    async def setautotranslate(self, ctx: commands.Context, auto_translate: bool):
-        """Set auto-translation to English for context menu"""
-        await self.config.guild(ctx.guild).auto_translate.set(auto_translate)
-        await ctx.send(_("Auto-translate has been set to {}").format(auto_translate))
+    async def autotranslate(self, ctx: commands.Context, option: str, channel: discord.TextChannel):
+        """Enable or disable auto-translation to English for a specific channel"""
+        option = option.lower()
+        if option not in ["on", "off"]:
+            return await ctx.send(_("Invalid option. Use 'on' or 'off'."))
+
+        async with self.config.guild(ctx.guild).auto_translate_channels() as auto_translate_channels:
+            cid = str(channel.id)
+            if option == "on":
+                if cid not in auto_translate_channels:
+                    auto_translate_channels.append(cid)
+                    await ctx.send(_("Auto-translate has been enabled for {}").format(channel.mention))
+                else:
+                    await ctx.send(_("Auto-translate is already enabled for {}").format(channel.mention))
+            elif option == "off":
+                if cid in auto_translate_channels:
+                    auto_translate_channels.remove(cid)
+                    await ctx.send(_("Auto-translate has been disabled for {}").format(channel.mention))
+                else:
+                    await ctx.send(_("Auto-translate is not enabled for {}").format(channel.mention))
 
     @commands.Cog.listener("on_message_without_command")
     async def message_handler(self, message: discord.Message):
@@ -279,59 +295,24 @@ class Fluent(commands.Cog):
             return
         if not message.guild:
             return
-        if message.content is None:
+        if not message.content:
             return
         if not message.channel:
             return
         if not message.content.strip():
             return
 
-        channels = await self.get_channels(message.guild)
-        channel_id = str(message.channel.id)
-        if channel_id not in channels:
-            return
-
-        lang1 = channels[channel_id]["lang1"]
-        lang2 = channels[channel_id]["lang2"]
-        log.debug(f"Translating... {lang1} <-> {lang2}")
-
-        channel = message.channel
-        async with channel.typing():
-            # Attempts to translate message into language1.
+        auto_translate_channels = await self.config.guild(message.guild).auto_translate_channels()
+        if str(message.channel.id) in auto_translate_channels:
+            target_lang = "en"
             try:
-                trans = await self.translate(message.content, lang1, force=True)
+                trans = await self.translate(message.content, target_lang, force=True)
             except Exception as e:
-                log.error("Initial listener translation failed", exc_info=e)
+                log.error("Auto-translation failed", exc_info=e)
                 self.bot._last_exception = e
                 return
 
-            if trans is None:
-                log.debug("Auto translation first phase returned None")
-                return
-
-            translator = TranslateManager()
-            source = await translator.get_lang(trans.src)
-            source = source.split("-")[0].lower()
-            target = await translator.get_lang(lang1)
-            target = target.split("-")[0].lower()
-            log.debug(f"Source: {source}, target: {target}")
-            log.debug(f"Raw Source: {trans.src}")
-
-            # If the source language is also language1, translate into language2
-            # If source language was language2, this saves api calls because translating gets the source and translation
-            if source == target:
-                try:
-                    trans = await self.translate(message.content, lang2)
-                except Exception as e:
-                    log.error("Secondary listener translation failed", exc_info=e)
-                    return
-
-                if trans is None:
-                    return await channel.send(_("Unable to finish translation, perhaps the API is down."))
-
-            # If translated text is the same as the source, no need to send
-            if trans.text.lower() == message.content.lower():
-                log.debug("Translated text is the same as the source, no need to send")
+            if trans is None or trans.src == target_lang or trans.text.lower() == message.content.lower():
                 return
 
             if message.channel.permissions_for(message.guild.me).embed_links:
@@ -339,12 +320,72 @@ class Fluent(commands.Cog):
                 try:
                     await message.reply(embed=embed, mention_author=False)
                 except (discord.NotFound, AttributeError):
-                    await channel.send(embed=embed)
+                    await message.channel.send(embed=embed)
             else:
                 try:
                     await message.reply(trans.text, mention_author=False)
                 except (discord.NotFound, AttributeError):
-                    await channel.send(trans.text)
+                    await message.channel.send(trans.text)
+        else:
+            channels = await self.get_channels(message.guild)
+            channel_id = str(message.channel.id)
+            if channel_id not in channels:
+                return
+
+            lang1 = channels[channel_id]["lang1"]
+            lang2 = channels[channel_id]["lang2"]
+            log.debug(f"Translating... {lang1} <-> {lang2}")
+
+            channel = message.channel
+            async with channel.typing():
+                # Attempts to translate message into language1.
+                try:
+                    trans = await self.translate(message.content, lang1, force=True)
+                except Exception as e:
+                    log.error("Initial listener translation failed", exc_info=e)
+                    self.bot._last_exception = e
+                    return
+
+                if trans is None:
+                    log.debug("Auto translation first phase returned None")
+                    return
+
+                translator = TranslateManager()
+                source = await translator.get_lang(trans.src)
+                source = source.split("-")[0].lower()
+                target = await translator.get_lang(lang1)
+                target = target.split("-")[0].lower()
+                log.debug(f"Source: {source}, target: {target}")
+                log.debug(f"Raw Source: {trans.src}")
+
+                # If the source language is also language1, translate into language2
+                # If source language was language2, this saves api calls because translating gets the source and translation
+                if source == target:
+                    try:
+                        trans = await self.translate(message.content, lang2)
+                    except Exception as e:
+                        log.error("Secondary listener translation failed", exc_info=e)
+                        return
+
+                    if trans is None:
+                        return await channel.send(_("Unable to finish translation, perhaps the API is down."))
+
+                # If translated text is the same as the source, no need to send
+                if trans.text.lower() == message.content.lower():
+                    log.debug("Translated text is the same as the source, no need to send")
+                    return
+
+                if message.channel.permissions_for(message.guild.me).embed_links:
+                    embed = discord.Embed(description=trans.text, color=message.author.color)
+                    try:
+                        await message.reply(embed=embed, mention_author=False)
+                    except (discord.NotFound, AttributeError):
+                        await channel.send(embed=embed)
+                else:
+                    try:
+                        await message.reply(trans.text, mention_author=False)
+                    except (discord.NotFound, AttributeError):
+                        await channel.send(trans.text)
 
     @commands.Cog.listener()
     async def on_assistant_cog_add(self, cog: commands.Cog):
