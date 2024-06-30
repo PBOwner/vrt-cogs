@@ -18,23 +18,24 @@ _ = Translator("Fluent", __file__)
 
 
 @app_commands.context_menu(name="Translate")
-async def translate_message_ctx(interaction: discord.Interaction, message: discord.Message):
+async def translate_message_ctx(interaction: discord.Interaction, message: discord.Message, auto_translate: bool = False):
     """Translate a message"""
     if not message.content and not message.embeds:
-        return await interaction.response.send_message(_("❌ No content to translate."), ephemeral=True)
+        return await interaction.response.send_message(_("No content to translate."), ephemeral=True)
     with suppress(discord.HTTPException):
         await interaction.response.defer(ephemeral=True)
     bot: Red = interaction.client
     content = message.content or message.embeds[0].description
-    res: t.Optional[Result] = await bot.get_cog("Fluent").translate(content, message.guild.preferred_locale.value)
+    target_lang = "en" if auto_translate else message.guild.preferred_locale.value
+    res: t.Optional[Result] = await bot.get_cog("Fluent").translate(content, target_lang)
     if res is None:
-        return await interaction.followup.send(_("❌ Translation failed."), ephemeral=True)
+        return await interaction.followup.send(_("Translation failed."), ephemeral=True)
     if res.src == res.dest:
         return await interaction.followup.send(
-            _("❌ The detected language is the same as the target language."), ephemeral=True
+            _("The detected language is the same as the target language."), ephemeral=True
         )
     if res.text == content:
-        return await interaction.followup.send(_("❌ Translated content matches the source."), ephemeral=True)
+        return await interaction.followup.send(_("Translated content matches the source."), ephemeral=True)
     embed = discord.Embed(
         description=res.text,
         color=await bot.get_embed_color(message),
@@ -50,7 +51,7 @@ class Fluent(commands.Cog):
 
     Fluent uses google translate by default, with [Flowery](https://flowery.pw/) as a fallback.
 
-    Fluent also supports the [Deepl](https://www.deepl.com/pro#developer) tranlsation api.
+    Fluent also supports the [Deepl](https://www.deepl.com/pro#developer) translation api.
     1. Register your free Deepl account **[Here](https://www.deepl.com/pro#developer)**.
     2. Obtain your API key **[Here](https://www.deepl.com/account/summary)**.
     3. Set your API key with:
@@ -109,9 +110,9 @@ class Fluent(commands.Cog):
         await ctx.send(f"Server locale is set to: {locale.name} - {locale.value}")
 
     @commands.hybrid_command(name="translate")
-    @app_commands.describe(to_language="Translate to this language")
+    @app_commands.describe(to_language="Translate to this language", auto_translate="Automatically translate to English")
     @commands.bot_has_permissions(embed_links=True)
-    async def translate_command(self, ctx: commands.Context, to_language: str, *, message: t.Optional[str] = None):
+    async def translate_command(self, ctx: commands.Context, to_language: str, auto_translate: bool = False, *, message: t.Optional[str] = None):
         """Translate a message"""
         translator = TranslateManager()
         lang = await translator.get_lang(to_language)
@@ -128,17 +129,19 @@ class Fluent(commands.Cog):
             txt = _("Could not find any content to translate!")
             return await ctx.send(txt)
 
+        target_lang = "en" if auto_translate else to_language
+
         try:
-            trans: t.Optional[Result] = await self.translate(message, to_language)
+            trans: t.Optional[Result] = await self.translate(message, target_lang)
         except Exception as e:
-            txt = _("An error occured while translating, Check logs for more info.")
+            txt = _("An error occurred while translating, Check logs for more info.")
             await ctx.send(txt)
             log.error("Translation failed", exc_info=e)
             self.bot._last_exception = e
             return
 
         if trans is None:
-            txt = _("❌ Translation failed.")
+            txt = _("Translation failed.")
             return await ctx.send(txt)
 
         embed = discord.Embed(description=trans.text, color=ctx.author.color)
@@ -213,11 +216,11 @@ class Fluent(commands.Cog):
         async with self.config.guild(ctx.guild).channels() as channels:
             cid = str(channel.id)
             if cid in channels.keys():
-                txt = _("❌ {} is already a fluent channel.").format(channel.mention)
+                txt = _("{} is already a fluent channel.").format(channel.mention)
                 return await ctx.send(txt)
             else:
                 channels[cid] = {"lang1": language1, "lang2": language2}
-                txt = _("✅ Fluent channel has been set!")
+                txt = _("Fluent channel has been set!")
                 return await ctx.send(txt)
 
     @fluent.command(aliases=["delete", "del", "rem"])
@@ -241,9 +244,9 @@ class Fluent(commands.Cog):
             cid = str(channel.id)
             if cid in channels:
                 del channels[cid]
-                return await ctx.send(_("✅ Fluent channel has been deleted!"))
+                return await ctx.send(_("Fluent channel has been deleted!"))
 
-            await ctx.send(_("❌ {} isn't a fluent channel!").format(channel.mention))
+            await ctx.send(_("{} isn't a fluent channel!").format(channel.mention))
 
     @fluent.command()
     async def view(self, ctx: commands.Context):
