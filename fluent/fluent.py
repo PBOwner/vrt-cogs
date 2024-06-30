@@ -16,17 +16,17 @@ from .common.constants import available_langs
 log = logging.getLogger("red.vrt.fluent")
 _ = Translator("Fluent", __file__)
 
-
 @app_commands.context_menu(name="Translate")
-async def translate_message_ctx(interaction: discord.Interaction, message: discord.Message, auto_translate: bool = False):
+async def translate_message_ctx(interaction: discord.Interaction, message: discord.Message):
     """Translate a message"""
     if not message.content and not message.embeds:
         return await interaction.response.send_message(_("No content to translate."), ephemeral=True)
     with suppress(discord.HTTPException):
         await interaction.response.defer(ephemeral=True)
     bot: Red = interaction.client
+    auto_translate = await bot.get_cog("Fluent").config.guild(interaction.guild).auto_translate()
     content = message.content or message.embeds[0].description
-    target_lang = "en" if auto_translate else message.guild.preferred_locale.value
+    target_lang = "en" if auto_translate else interaction.guild.preferred_locale.value
     res: t.Optional[Result] = await bot.get_cog("Fluent").translate(content, target_lang)
     if res is None:
         return await interaction.followup.send(_("Translation failed."), ephemeral=True)
@@ -41,7 +41,6 @@ async def translate_message_ctx(interaction: discord.Interaction, message: disco
         color=await bot.get_embed_color(message),
     ).set_footer(text=f"{res.src} -> {res.dest}")
     await interaction.followup.send(embed=embed, ephemeral=True)
-
 
 # redgettext -D fluent/fluent.py --command-docstring
 @cog_i18n(_)
@@ -73,7 +72,7 @@ class Fluent(commands.Cog):
     def __init__(self, bot: Red):
         self.bot = bot
         self.config = Config.get_conf(self, identifier=11701170)
-        self.config.register_guild(channels={})
+        self.config.register_guild(channels={}, auto_translate=False)
         logging.getLogger("hpack.hpack").setLevel(logging.INFO)
         logging.getLogger("deepl").setLevel(logging.WARNING)
 
@@ -266,6 +265,13 @@ class Fluent(commands.Cog):
         final = _("**Fluent Settings**\n{}").format(msg.strip())
         for p in pagify(final, page_length=1000):
             await ctx.send(p)
+
+    @commands.command()
+    @commands.mod()
+    async def setautotranslate(self, ctx: commands.Context, auto_translate: bool):
+        """Set auto-translation to English for context menu"""
+        await self.config.guild(ctx.guild).auto_translate.set(auto_translate)
+        await ctx.send(_("Auto-translate has been set to {}").format(auto_translate))
 
     @commands.Cog.listener("on_message_without_command")
     async def message_handler(self, message: discord.Message):
